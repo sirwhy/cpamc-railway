@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CPAMC AI v3</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0f0f0f;--bg2:#1a1a1a;--bg3:#242424;--border:#2e2e2e;--text:#e0e0e0;--muted:#888;--blue:#3b82f6;--green:#22c55e;--red:#ef4444;--purple:#a78bfa;--orange:#f97316}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text);height:100dvh;display:flex;flex-direction:column;overflow:hidden}
+
+/* Header */
+header{background:var(--bg2);padding:0 16px;height:52px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);flex-shrink:0}
+.logo{font-weight:700;font-size:15px;color:#fff;display:flex;align-items:center;gap:6px}
+.logo-v{font-size:10px;padding:2px 5px;background:#1e3a2a;color:var(--green);border-radius:4px}
+.badge{font-size:11px;padding:3px 8px;border-radius:20px;background:#1e3a2a;color:var(--green)}
+.badge.blue{background:#1e2f4a;color:var(--blue)}
+.badge.orange{background:#2a1e0f;color:var(--orange)}
+.spacer{flex:1}
+.header-btn{background:none;border:1px solid var(--border);color:var(--muted);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;transition:.15s}
+.header-btn:hover{border-color:var(--blue);color:var(--blue)}
+.model-selector{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-family:inherit;transition:.15s;display:flex;align-items:center;gap:4px}
+.model-selector:hover{border-color:var(--blue);color:var(--blue)}
+.model-list{max-height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;margin-bottom:10px}
+.model-item{padding:8px 12px;border-radius:7px;cursor:pointer;font-size:13px;font-family:monospace;border:none;background:none;color:var(--text);text-align:left;transition:.15s}
+.model-item:hover{background:var(--bg3)}
+.model-item.active{background:#1a2a3a;color:var(--blue);font-weight:600}
+.model-item.active::after{content:"  ✓";color:var(--green)}
+
+/* Layout */
+.layout{display:flex;flex:1;overflow:hidden}
+
+/* Sidebar */
+.sidebar{width:220px;background:var(--bg2);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0}
+.sidebar-section{padding:12px}
+.section-title{font-size:10px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.skill-item{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:7px;cursor:pointer;font-size:13px;color:var(--text);border:none;background:none;width:100%;text-align:left;transition:.15s}
+.skill-item:hover{background:var(--bg3)}
+.skill-item.active{background:#1a2a3a;color:var(--blue)}
+.skill-dot{width:7px;height:7px;border-radius:50%;background:var(--border);flex-shrink:0;transition:.15s}
+.skill-item.active .skill-dot{background:var(--blue)}
+.skill-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sidebar-footer{margin-top:auto;padding:12px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:8px}
+.memory-count{font-size:12px;color:var(--muted)}
+.sidebar-actions{display:flex;flex-direction:column;gap:4px}
+.sidebar-action{font-size:12px;padding:6px 8px;background:none;border:1px solid var(--border);color:var(--muted);border-radius:6px;cursor:pointer;text-align:left;transition:.15s}
+.sidebar-action:hover{border-color:var(--blue);color:var(--blue)}
+
+/* Chat */
+.chat{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px;scroll-behavior:smooth}
+.messages::-webkit-scrollbar{width:4px}
+.messages::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+.msg{max-width:80%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.7;word-break:break-word;white-space:pre-wrap}
+.msg.user{align-self:flex-end;background:#1d3557;color:#cce3ff;border-bottom-right-radius:4px}
+.msg.ai{align-self:flex-start;background:var(--bg3);color:var(--text);border-bottom-left-radius:4px;border:1px solid var(--border)}
+.msg.system{align-self:center;background:#1e1a2e;color:var(--purple);font-size:12px;padding:5px 12px;border-radius:20px;max-width:90%}
+.msg.error{align-self:flex-start;background:#2a1212;color:var(--red);border:1px solid #3d1a1a;border-bottom-left-radius:4px}
+.msg.status{align-self:flex-start;background:#1e2a1e;color:var(--green);font-size:12px;padding:5px 12px;border-radius:20px;max-width:90%;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+
+.typing{align-self:flex-start;background:var(--bg3);border:1px solid var(--border);border-radius:14px;border-bottom-left-radius:4px;padding:12px 16px}
+.typing span{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);animation:bounce .8s infinite;margin:0 2px}
+.typing span:nth-child(2){animation-delay:.15s}
+.typing span:nth-child(3){animation-delay:.3s}
+@keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}}
+
+/* Input area */
+.input-area{border-top:1px solid var(--border);flex-shrink:0}
+.input-toolbar{display:flex;gap:6px;padding:8px 16px 0;align-items:center}
+.toolbar-btn{background:none;border:1px solid var(--border);color:var(--muted);padding:4px 8px;border-radius:6px;cursor:pointer;font-size:12px;transition:.15s}
+.toolbar-btn:hover{border-color:var(--blue);color:var(--blue)}
+.toolbar-btn.active{border-color:var(--blue);color:var(--blue);background:#1e2f4a}
+.input-wrap{padding:8px 16px 12px;display:flex;gap:8px;align-items:flex-end}
+textarea#inp{flex:1;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:9px 13px;border-radius:10px;font-size:14px;font-family:inherit;resize:none;min-height:40px;max-height:120px;line-height:1.5;transition:.15s}
+textarea#inp:focus{outline:none;border-color:var(--blue)}
+textarea#inp::placeholder{color:var(--muted)}
+#sendBtn{background:var(--blue);color:#fff;border:none;width:40px;height:40px;border-radius:10px;cursor:pointer;font-size:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:.15s}
+#sendBtn:hover{background:#2563eb}
+#sendBtn:disabled{background:var(--bg3);color:var(--muted);cursor:not-allowed}
+
+/* Image preview in input */
+.img-preview{margin:4px 16px;display:none;position:relative;width:fit-content}
+.img-preview img{max-height:80px;border-radius:8px;border:1px solid var(--border)}
+.img-preview .remove{position:absolute;top:-6px;right:-6px;background:var(--red);border:none;color:#fff;width:18px;height:18px;border-radius:50%;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center}
+
+/* Modal */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:100}
+.modal-bg.open{display:flex}
+.modal{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:20px;width:90%;max-width:520px;max-height:80vh;overflow-y:auto}
+.modal h3{font-size:15px;margin-bottom:14px;font-weight:500}
+.modal input,.modal textarea,.modal select{width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:8px 11px;border-radius:7px;font-size:13px;font-family:inherit;margin-bottom:8px}
+.modal textarea{resize:vertical;min-height:80px}
+.modal-btns{display:flex;gap:8px;margin-top:4px;flex-wrap:wrap}
+.btn{padding:8px 16px;border-radius:7px;cursor:pointer;font-size:13px;border:none;font-weight:500}
+.btn-primary{background:var(--blue);color:#fff}
+.btn-primary:hover{background:#2563eb}
+.btn-ghost{background:none;border:1px solid var(--border);color:var(--muted)}
+.btn-ghost:hover{border-color:var(--text);color:var(--text)}
+.btn-danger{background:#2a1212;color:var(--red);border:1px solid #3d1a1a}
+.btn-success{background:#1e3a2a;color:var(--green);border:none}
+.btn-success:hover{background:#22c55e20}
+
+/* Memory */
+.mem-item{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border);font-size:13px}
+.mem-item:last-child{border:none}
+.mem-txt{flex:1;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mem-type{font-size:10px;color:var(--muted);background:var(--bg3);padding:2px 6px;border-radius:4px;flex-shrink:0}
+.mem-del{background:none;border:none;color:var(--muted);cursor:pointer;padding:2px 6px;border-radius:4px;font-size:14px}
+.mem-del:hover{color:var(--red)}
+
+/* Form */
+.form-group{margin-bottom:8px}
+.form-group label{font-size:11px;color:var(--muted);display:block;margin-bottom:3px;text-transform:uppercase;letter-spacing:.4px}
+
+/* Export pills */
+.export-pills{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.export-pill{padding:6px 14px;border-radius:20px;border:1px solid var(--border);background:none;color:var(--muted);cursor:pointer;font-size:13px;transition:.15s}
+.export-pill:hover{border-color:var(--blue);color:var(--blue)}
+
+/* Mobile */
+@media(max-width:640px){
+  .sidebar{position:fixed;left:-220px;top:0;bottom:0;z-index:50;transition:left .2s}
+  .sidebar.open{left:0}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">CPAMC AI <span class="logo-v">v3</span></div>
+  <button class="model-selector" id="modelBtn" onclick="openModelPicker()" title="Klik untuk ganti model">
+    <span id="modelBadge">⏳ detecting...</span> ▾
+  </button>
+  <span class="badge blue" id="sessionBadge">0 sessions</span>
+  <span class="badge" id="dbBadge" style="display:none">📁 File</span>
+  <span class="badge orange" id="skillBadge" style="display:none">0 skills aktif</span>
+  <div class="spacer"></div>
+  <button class="header-btn" onclick="openMemory()">📝 Memory</button>
+  <button class="header-btn" onclick="openInstallSkill()">➕ Skill</button>
+  <button class="header-btn" onclick="openExport()">📤 Export</button>
+</header>
+
+<div class="layout">
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-section">
+      <div class="section-title">Skills</div>
+      <div id="skillsList"></div>
+    </div>
+    <div class="sidebar-footer">
+      <div class="memory-count" id="memCount">Memory: 0 item</div>
+      <div class="sidebar-actions">
+        <button class="sidebar-action" onclick="sendCmd('/status')">📊 Status</button>
+        <button class="sidebar-action" onclick="sendCmd('/clear')">🗑 Clear History</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="chat">
+    <div class="messages" id="msgs">
+      <div class="msg system">🤖 CPAMC AI v3 — Siap digunakan. Ketik atau upload file/gambar!</div>
+    </div>
+
+    <div class="input-area">
+      <div class="input-toolbar">
+        <label class="toolbar-btn" title="Upload gambar">
+          🖼️ Gambar
+          <input type="file" id="imgInput" accept="image/*" style="display:none" onchange="handleImageSelect(this)">
+        </label>
+        <label class="toolbar-btn" title="Upload file">
+          📎 File
+          <input type="file" id="fileInput" style="display:none" onchange="handleFileSelect(this)">
+        </label>
+        <button class="toolbar-btn" onclick="sendCmd('/help')" title="Bantuan">❓ Help</button>
+        <button class="toolbar-btn" onclick="sendCmd('/skills')" title="Lihat skills">🔧 Skills</button>
+        <button class="toolbar-btn" onclick="sendCmd('/memory')" title="Lihat memori">🧠 Memory</button>
+      </div>
+      <div class="img-preview" id="imgPreview">
+        <img id="imgPreviewImg" src="" alt="preview">
+        <button class="remove" onclick="clearImage()">×</button>
+      </div>
+      <div class="input-wrap">
+        <textarea id="inp" placeholder="Ketik pesan... (Enter kirim, Shift+Enter baris baru)" rows="1"></textarea>
+        <button id="sendBtn" onclick="send()">↑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Model Picker Modal -->
+<div class="modal-bg" id="modelModal">
+  <div class="modal">
+    <h3>🤖 Pilih Model</h3>
+    <p style="color:var(--muted);font-size:12px;margin-bottom:10px" id="modelSource"></p>
+    <div id="modelList" class="model-list"><div style="color:var(--muted);font-size:13px">⏳ Memuat daftar model...</div></div>
+    <div class="modal-btns">
+      <button class="btn btn-ghost" onclick="refreshModels()">🔄 Refresh</button>
+      <button class="btn btn-ghost" onclick="closeModal('modelModal')">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<!-- Memory Modal -->
+<div class="modal-bg" id="memModal">
+  <div class="modal">
+    <h3>📝 Memory</h3>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <input id="memSearch" placeholder="Cari memori..." style="flex:1;margin:0"
+        oninput="searchMem(this.value)">
+    </div>
+    <div id="memList"></div>
+    <div class="modal-btns" style="margin-top:12px">
+      <button class="btn btn-danger" onclick="clearAllMem()">Hapus Semua</button>
+      <button class="btn btn-ghost" onclick="closeModal('memModal')">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<!-- Install Skill Modal -->
+<div class="modal-bg" id="skillModal">
+  <div class="modal">
+    <h3>➕ Install Skill Baru</h3>
+    <div class="form-group"><label>Nama Skill</label>
+      <input id="sk-name" placeholder="contoh: seo-expert"></div>
+    <div class="form-group"><label>Deskripsi</label>
+      <input id="sk-desc" placeholder="contoh: Ahli SEO dan optimasi konten"></div>
+    <div class="form-group"><label>Kata Kunci Trigger (pisah koma)</label>
+      <input id="sk-triggers" placeholder="seo, optimasi, ranking, keyword"></div>
+    <div class="form-group"><label>Instruksi untuk AI (prompt)</label>
+      <textarea id="sk-prompt" placeholder="Kamu adalah ahli SEO berpengalaman. Selalu berikan saran yang spesifik dan actionable..."></textarea>
+    </div>
+    <div class="modal-btns">
+      <button class="btn btn-primary" onclick="installSkill()">Install</button>
+      <button class="btn btn-ghost" onclick="closeModal('skillModal')">Batal</button>
+    </div>
+  </div>
+</div>
+
+<!-- Export Modal -->
+<div class="modal-bg" id="exportModal">
+  <div class="modal">
+    <h3>📤 Export Session</h3>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:12px">Export seluruh history chat sesi ini</p>
+    <div class="export-pills">
+      <button class="export-pill" onclick="doExport('markdown')">📄 Markdown</button>
+      <button class="export-pill" onclick="doExport('json')">🔧 JSON</button>
+      <button class="export-pill" onclick="doExport('html')">🌐 HTML</button>
+    </div>
+    <div class="modal-btns" style="margin-top:16px">
+      <button class="btn btn-ghost" onclick="closeModal('exportModal')">Tutup</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────
+const uid = 'user-' + (localStorage.getItem('cpamc-uid') || (() => {
+  const id = Math.random().toString(36).slice(2, 9);
+  localStorage.setItem('cpamc-uid', id);
+  return id;
+})());
+
+const msgs = document.getElementById('msgs');
+const inp = document.getElementById('inp');
+const sendBtn = document.getElementById('sendBtn');
+const activeSkills = new Set();
+let pendingImage = null; // { base64, type, previewUrl }
+
+// ── Message Display ────────────────────────────────────────────
+function addMsg(text, type) {
+  // Remove existing status if adding real message
+  if (type !== 'status') {
+    document.getElementById('ai-status')?.remove();
+  }
+
+  const el = document.createElement('div');
+  el.className = 'msg ' + type;
+  if (type === 'status') el.id = 'ai-status';
+
+  // Basic markdown rendering for AI messages
+  if (type === 'ai') {
+    el.innerHTML = renderMarkdown(text);
+  } else {
+    el.textContent = text;
+  }
+  msgs.appendChild(el);
+  msgs.scrollTop = msgs.scrollHeight;
+  return el;
+}
+
+function renderMarkdown(text) {
+  return text
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
+      `<pre style="background:var(--bg);padding:12px;border-radius:8px;overflow-x:auto;border:1px solid var(--border);margin:8px 0"><code style="font-family:monospace;font-size:13px">${code.trim()}</code></pre>`)
+    .replace(/`([^`]+)`/g, '<code style="background:var(--bg);padding:2px 5px;border-radius:4px;font-family:monospace;font-size:13px">$1</code>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^#{1,3}\s(.+)$/gm, '<strong style="font-size:15px">$1</strong>')
+    .replace(/\n/g, '<br>');
+}
+
+function showTyping() {
+  const el = document.createElement('div');
+  el.className = 'typing'; el.id = 'typing';
+  el.innerHTML = '<span></span><span></span><span></span>';
+  msgs.appendChild(el);
+  msgs.scrollTop = msgs.scrollHeight;
+}
+
+function hideTyping() {
+  document.getElementById('typing')?.remove();
+}
+
+// ── Image Handling ─────────────────────────────────────────────
+function handleImageSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const dataUrl = e.target.result;
+    const base64 = dataUrl.split(',')[1];
+    pendingImage = { base64, type: file.type, previewUrl: dataUrl };
+    document.getElementById('imgPreviewImg').src = dataUrl;
+    document.getElementById('imgPreview').style.display = 'block';
+    inp.placeholder = 'Tambahkan pertanyaan tentang gambar ini...';
+  };
+  reader.readAsDataURL(file);
+  input.value = '';
+}
+
+function clearImage() {
+  pendingImage = null;
+  document.getElementById('imgPreview').style.display = 'none';
+  document.getElementById('imgPreviewImg').src = '';
+  inp.placeholder = 'Ketik pesan... (Enter kirim, Shift+Enter baris baru)';
+}
+
+// ── File Handling ─────────────────────────────────────────────
+async function handleFileSelect(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+
+  const MAX = 5 * 1024 * 1024;
+  if (file.size > MAX) return addMsg('❌ File terlalu besar (max 5MB)', 'error');
+
+  addMsg(`📎 Mengupload: ${file.name}...`, 'status');
+  showTyping();
+
+  try {
+    const text = await file.text();
+    const ext = file.name.split('.').pop();
+    const userMsg = `Analisis file "${file.name}":\n\`\`\`${ext}\n${text.slice(0, 12000)}${text.length > 12000 ? '\n...[terpotong]' : ''}\n\`\`\`\n\nBerikan analisis lengkap.`;
+
+    hideTyping();
+    addMsg(`📎 ${file.name} (${(file.size/1024).toFixed(1)}KB)`, 'user');
+    await doChat(userMsg);
+  } catch (e) {
+    hideTyping();
+    addMsg('❌ Gagal membaca file: ' + e.message, 'error');
+  }
+}
+
+// ── Core Send ──────────────────────────────────────────────────
+async function send() {
+  const text = inp.value.trim();
+  if (!text && !pendingImage) return;
+  if (sendBtn.disabled) return;
+
+  const msgText = text || 'Analisis gambar ini.';
+  inp.value = '';
+  inp.style.height = '40px';
+  sendBtn.disabled = true;
+
+  if (pendingImage) {
+    addMsg(`🖼️ ${msgText}`, 'user');
+  } else {
+    addMsg(msgText, 'user');
+  }
+
+  await doChat(msgText, pendingImage);
+  if (pendingImage) clearImage();
+}
+
+async function doChat(message, img = null) {
+  showTyping();
+  let statusEl = null;
+
+  try {
+    const body = { userId: uid, message, platform: 'web' };
+    if (img) { body.imageBase64 = img.base64; body.imageType = img.type; }
+
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    hideTyping();
+    statusEl?.remove();
+
+    if (d.error) {
+      addMsg('❌ ' + d.error, 'error');
+    } else {
+      const isCmd = d.text.startsWith('✓') || d.text.startsWith('📝') ||
+                    d.text.startsWith('📊') || d.text.startsWith('🔧') ||
+                    d.text.startsWith('⭕') || d.text.startsWith('✅') ||
+                    d.isCommand;
+      addMsg(d.text, isCmd ? 'system' : 'ai');
+      if (d.skills) {
+        activeSkills.clear();
+        d.skills.forEach(s => activeSkills.add(s));
+        updateSkillBadge();
+        renderSkills();
+      }
+    }
+  } catch (e) {
+    hideTyping();
+    addMsg('❌ Koneksi gagal: ' + e.message, 'error');
+  } finally {
+    sendBtn.disabled = false;
+    inp.focus();
+    loadStatus();
+    loadMemCount();
+  }
+}
+
+async function sendCmd(cmd) {
+  addMsg(cmd, 'user');
+  await doChat(cmd);
+}
+
+// ── Input Events ───────────────────────────────────────────────
+inp.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+});
+inp.addEventListener('input', function() {
+  this.style.height = '40px';
+  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+});
+
+// Paste image support
+inp.addEventListener('paste', e => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile();
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const base64 = ev.target.result.split(',')[1];
+        pendingImage = { base64, type: item.type, previewUrl: ev.target.result };
+        document.getElementById('imgPreviewImg').src = ev.target.result;
+        document.getElementById('imgPreview').style.display = 'block';
+      };
+      reader.readAsDataURL(file);
+      break;
+    }
+  }
+});
+
+// ── Status & UI ────────────────────────────────────────────────
+async function loadStatus() {
+  try {
+    const [sRes, mRes] = await Promise.all([fetch('/api/status'), fetch('/api/models')]);
+    const s = await sRes.json();
+    const m = await mRes.json();
+    document.getElementById('modelBadge').textContent = m.selected || s.stats.model || '—';
+    document.getElementById('sessionBadge').textContent = s.stats.sessions + ' sessions';
+    // Update DB badge
+    const dbBadge = document.getElementById('dbBadge');
+    if (dbBadge) dbBadge.textContent = s.stats.database === 'mongodb' ? '🍃 MongoDB' : '📁 File';
+  } catch (e) {}
+}
+
+async function openModelPicker() {
+  document.getElementById('modelModal').classList.add('open');
+  await loadModelList();
+}
+
+async function loadModelList(forceRefresh = false) {
+  const listEl   = document.getElementById('modelList');
+  const sourceEl = document.getElementById('modelSource');
+  listEl.innerHTML = '<div style="color:var(--muted);font-size:13px">⏳ Memuat...</div>';
+  try {
+    const r = await fetch('/api/models' + (forceRefresh ? '?refresh=1' : ''));
+    const d = await r.json();
+    sourceEl.textContent = `${d.total} model tersedia · sumber: ${d.source} · refresh: ${d.lastFetch ? new Date(d.lastFetch).toLocaleTimeString('id-ID') : '-'}`;
+    if (!d.models.length) {
+      listEl.innerHTML = '<div style="color:var(--muted)">Tidak ada model ditemukan.</div>';
+      return;
+    }
+    listEl.innerHTML = d.models.map(m => `
+      <button class="model-item ${m === d.selected ? 'active' : ''}"
+        onclick="selectModel('${m}')">${m}</button>`).join('');
+  } catch (e) {
+    listEl.innerHTML = `<div style="color:var(--red)">Gagal memuat: ${e.message}</div>`;
+  }
+}
+
+async function selectModel(modelId) {
+  await fetch('/api/models/select', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelId })
+  });
+  document.getElementById('modelBadge').textContent = modelId;
+  closeModal('modelModal');
+  addMsg(`🤖 Model diganti ke: ${modelId}`, 'system');
+}
+
+async function refreshModels() {
+  await loadModelList(true);
+}
+
+async function loadSkills() {
+  try {
+    const r = await fetch('/api/skills');
+    const skills = await r.json();
+    renderSkills(skills);
+  } catch (e) {}
+}
+
+function renderSkills(skills) {
+  const el = document.getElementById('skillsList');
+  if (!skills) {
+    fetch('/api/skills').then(r => r.json()).then(renderSkills).catch(() => {});
+    return;
+  }
+  el.innerHTML = '';
+  skills.forEach(s => {
+    const btn = document.createElement('button');
+    btn.className = 'skill-item' + (activeSkills.has(s.name) ? ' active' : '');
+    btn.innerHTML = `<span class="skill-dot"></span><span class="skill-name" title="${s.description || ''}">${s.name}</span>`;
+    btn.onclick = () => toggleSkill(s.name, btn);
+    el.appendChild(btn);
+  });
+}
+
+function updateSkillBadge() {
+  const badge = document.getElementById('skillBadge');
+  if (activeSkills.size > 0) {
+    badge.textContent = activeSkills.size + ' skill aktif';
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+async function toggleSkill(name, btn) {
+  const r = await fetch('/api/chat', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ userId: uid, message: '/skill ' + name })
+  });
+  const d = await r.json();
+  if (activeSkills.has(name)) {
+    activeSkills.delete(name); btn.classList.remove('active');
+  } else {
+    activeSkills.add(name); btn.classList.add('active');
+  }
+  updateSkillBadge();
+  addMsg(d.text, 'system');
+}
+
+async function loadMemCount() {
+  try {
+    const r = await fetch('/api/memory/' + uid);
+    const mems = await r.json();
+    document.getElementById('memCount').textContent = `Memory: ${mems.length} item`;
+  } catch (e) {}
+}
+
+// ── Memory Modal ───────────────────────────────────────────────
+let allMemories = [];
+async function openMemory() {
+  try {
+    const r = await fetch('/api/memory/' + uid);
+    allMemories = await r.json();
+    renderMemList(allMemories);
+    document.getElementById('memModal').classList.add('open');
+  } catch (e) {}
+}
+
+function renderMemList(mems) {
+  const list = document.getElementById('memList');
+  list.innerHTML = mems.length === 0
+    ? '<div style="color:var(--muted);font-size:13px">Belum ada memori.</div>'
+    : mems.map(m => `
+      <div class="mem-item">
+        <span class="mem-txt" title="${m.content}">${m.content}</span>
+        <span class="mem-type">${m.type}</span>
+        <button class="mem-del" onclick="deleteMem('${m.id}', this.parentElement)">×</button>
+      </div>`).join('');
+}
+
+function searchMem(q) {
+  if (!q) return renderMemList(allMemories);
+  const filtered = allMemories.filter(m => m.content.toLowerCase().includes(q.toLowerCase()));
+  renderMemList(filtered);
+}
+
+async function deleteMem(id, el) {
+  await fetch(`/api/memory/${uid}/${id}`, { method: 'DELETE' });
+  el.remove();
+  allMemories = allMemories.filter(m => m.id !== id);
+  loadMemCount();
+}
+
+async function clearAllMem() {
+  if (!confirm('Hapus semua memori?')) return;
+  await fetch(`/api/memory/${uid}`, { method: 'DELETE' });
+  allMemories = [];
+  renderMemList([]);
+  loadMemCount();
+}
+
+// ── Skill Install Modal ────────────────────────────────────────
+function openInstallSkill() {
+  document.getElementById('skillModal').classList.add('open');
+}
+
+async function installSkill() {
+  const name = document.getElementById('sk-name').value.trim();
+  const desc = document.getElementById('sk-desc').value.trim();
+  const triggers = document.getElementById('sk-triggers').value.split(',').map(t => t.trim()).filter(Boolean);
+  const prompt = document.getElementById('sk-prompt').value.trim();
+  if (!name || !prompt) return alert('Nama dan Prompt wajib diisi!');
+
+  const r = await fetch('/api/skills', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, description: desc, triggers, prompt, category: 'custom' })
+  });
+  const d = await r.json();
+  if (d.ok) {
+    closeModal('skillModal');
+    addMsg('✅ ' + d.message, 'system');
+    loadSkills();
+    ['sk-name', 'sk-desc', 'sk-triggers'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('sk-prompt').value = '';
+  } else {
+    alert('Error: ' + d.error);
+  }
+}
+
+// ── Export Modal ───────────────────────────────────────────────
+function openExport() {
+  document.getElementById('exportModal').classList.add('open');
+}
+
+function doExport(format) {
+  window.open(`/api/session/${uid}/export?format=${format}`, '_blank');
+  closeModal('exportModal');
+}
+
+// ── Modals ─────────────────────────────────────────────────────
+function closeModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+document.querySelectorAll('.modal-bg').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+// ── Init ───────────────────────────────────────────────────────
+loadStatus();
+loadSkills();
+loadMemCount();
+setInterval(loadStatus, 15000);
+</script>
+</body>
+</html>
