@@ -285,11 +285,19 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
 
 // ── Start Server ───────────────────────────────────────────────
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', async () => {
   console.log(`✅ CPAMC AI Server v3 jalan di port ${PORT}`);
   console.log(`   Dashboard : http://localhost:${PORT}`);
-  console.log(`   Model     : ${process.env.MODEL || 'claude-sonnet-4-5'}`);
-  console.log(`   API       : ${process.env.CPAMC_BASE_URL || '(tidak diset)'}`);
+  const apiUrl = process.env.CPAMC_BASE_URL || '(tidak diset)';
+  const upstream = require('../core/model_detector');
+  console.log(`   API       : ${apiUrl}${upstream.is9Router() ? ' (9router)' : ''}`);
+  try {
+    const active = await upstream.getActiveModel(true);
+    const info   = upstream.getInfo();
+    console.log(`   Model     : ${active}${info.isManual ? ' (env)' : ` (auto, dari ${info.total} model)`}`);
+  } catch {
+    console.log(`   Model     : ${process.env.MODEL || 'claude-sonnet-4-5'} (fallback)`);
+  }
   console.log(`   WebSocket : ws://localhost:${PORT}`);
 });
 

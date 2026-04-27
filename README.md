@@ -69,16 +69,23 @@ npm install
 Copy `.env.example` ke `.env` dan isi:
 
 ```env
-# WAJIB
+# WAJIB — pilih salah satu upstream LLM:
+#   A. Cloud proxy CPAMC default
 CPAMC_BASE_URL=https://cli-proxy-api-production-9440.up.railway.app/v1
+#   B. 9router lokal (`npm i -g 9router && 9router`) → http://localhost:20128/v1
+#   C. 9router remote / OpenRouter / OpenAI langsung
 CPAMC_API_KEY=dummy
 TELEGRAM_BOT_TOKEN=your_token_here
 
 # OPSIONAL
 OPENAI_API_KEY=sk-...     # untuk transkripsi voice
 ALLOWED_USERS=123456789   # whitelist user ID
-MODEL=claude-sonnet-4-5
+MODEL=                    # kosongkan = auto-detect best dari /v1/models
+                          # boleh bare (`claude-sonnet-4-5`) atau prefixed (`anthropic/claude-sonnet-4-5`)
 ```
+
+> **Pakai 9router?** CPAMC v3.1 sudah prefix-aware (`<provider>/<model>`).
+> Panduan lengkap: **[docs/9ROUTER_SETUP.md](docs/9ROUTER_SETUP.md)**.
 
 ### 3. Push ke Railway
 
