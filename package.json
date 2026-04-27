@@ -1,7 +1,7 @@
 {
   "name": "cpamc-ai-v3",
-  "version": "3.0.0",
-  "description": "CPAMC AI Framework v3 - Enhanced with Voice, Image, Git, Rate Limiting, Session Export, Quick Actions",
+  "version": "3.1.0",
+  "description": "CPAMC AI Framework v3 — full claude-code-telegram parity: Voice, Image, Git, Rate Limit, Session Export, Audit, Webhook, Scheduler, Notifications, Workspace Registry, MongoDB persistence",
   "main": "dashboard/server.js",
   "scripts": {
     "start": "node dashboard/server.js",
