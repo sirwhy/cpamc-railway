@@ -21,6 +21,8 @@ require('dotenv').config();
 const db = require('../core/db');
 const engine = require('../core/engine');
 const sessionExport = require('../core/session_export');
+const audit = require('../core/audit');
+const notifications = require('../core/notifications');
 
 // Init MongoDB
 db.connect();
@@ -159,6 +161,7 @@ async function downloadFile(ctx, fileId) {
 bot.use(async (ctx, next) => {
   const userId = ctx.from?.id;
   if (userId && !isAllowed(userId)) {
+    await audit.logAuth(userId, false, 'not in ALLOWED_USERS', { platform: 'telegram' });
     return ctx.reply('⛔ Akses ditolak. User tidak diizinkan.');
   }
   return next();
@@ -211,6 +214,57 @@ bot.command('status', async ctx => {
 bot.command('clear', async ctx => {
   const res = await engine.chat(ctx.from.id.toString(), '/clear', { platform: 'telegram' });
   await ctx.reply(res.text);
+});
+
+bot.command('new', async ctx => {
+  const res = await engine.chat(ctx.from.id.toString(), '/new', { platform: 'telegram' });
+  await ctx.reply(res.text);
+});
+
+bot.command('stop', async ctx => {
+  engine.requestCancel(ctx.from.id.toString());
+  await audit.logCommand(ctx.from.id, '/stop', [], { platform: 'telegram' });
+  await ctx.reply('🛑 Stop signal dikirim. Tool loop akan berhenti pada iterasi berikutnya.');
+});
+
+bot.command('verbose', async ctx => {
+  const res = await engine.chat(ctx.from.id.toString(), ctx.message.text, { platform: 'telegram' });
+  await ctx.reply(res.text, { parse_mode: 'Markdown' });
+});
+
+bot.command('pwd', async ctx => {
+  const res = await engine.chat(ctx.from.id.toString(), '/pwd', { platform: 'telegram' });
+  await ctx.reply(res.text, { parse_mode: 'Markdown' });
+});
+
+bot.command('cd', async ctx => {
+  const res = await engine.chat(ctx.from.id.toString(), ctx.message.text, { platform: 'telegram' });
+  await ctx.reply(res.text, { parse_mode: 'Markdown' });
+});
+
+bot.command('ls', async ctx => {
+  const res = await engine.chat(ctx.from.id.toString(), '/ls', { platform: 'telegram' });
+  await ctx.reply(res.text, { parse_mode: 'Markdown' });
+});
+
+bot.command('projects', async ctx => {
+  const res = await engine.chat(ctx.from.id.toString(), '/projects', { platform: 'telegram' });
+  await ctx.reply(res.text, { parse_mode: 'Markdown' });
+});
+
+bot.command('git', async ctx => {
+  const res = await engine.chat(ctx.from.id.toString(), ctx.message.text, { platform: 'telegram' });
+  await ctx.reply(res.text, { parse_mode: 'Markdown' });
+});
+
+bot.command('jobs', async ctx => {
+  const res = await engine.chat(ctx.from.id.toString(), '/jobs', { platform: 'telegram' });
+  await ctx.reply(res.text, { parse_mode: 'Markdown' });
+});
+
+bot.command('audit', async ctx => {
+  const res = await engine.chat(ctx.from.id.toString(), '/audit', { platform: 'telegram' });
+  await ctx.reply(res.text, { parse_mode: 'Markdown' });
 });
 
 bot.command('forget', async ctx => {
@@ -297,6 +351,14 @@ bot.action('qa_clear', async ctx => {
   await ctx.answerCbQuery('Cleared!');
   engine.clearSession(ctx.from.id.toString());
   await ctx.reply('✓ History chat dihapus.');
+});
+
+// Stop button — cancels running tool loop (dipasang otomatis kalau loop
+// sedang jalan). User juga bisa /stop di chat.
+bot.action('qa_stop', async ctx => {
+  await ctx.answerCbQuery('Stopping...');
+  engine.requestCancel(ctx.from.id.toString());
+  await ctx.reply('🛑 Stop signal dikirim.');
 });
 
 bot.action('qa_note_code', async ctx => {
@@ -577,12 +639,54 @@ bot.catch((err, ctx) => {
   }
 });
 
+// ── Bot Command Menu ───────────────────────────────────────────
+// Daftar yang muncul di Telegram saat user ketik "/"
+async function setupBotCommands() {
+  try {
+    await bot.telegram.setMyCommands([
+      { command: 'start',    description: 'Sambutan & panduan singkat' },
+      { command: 'help',     description: 'Bantuan lengkap' },
+      { command: 'new',      description: 'Mulai sesi baru (hapus history)' },
+      { command: 'stop',     description: 'Hentikan tool loop yang sedang jalan' },
+      { command: 'status',   description: 'Status engine & stats' },
+      { command: 'verbose',  description: 'Atur level verbose: /verbose 0|1|2' },
+      { command: 'memory',   description: 'Lihat memori tersimpan' },
+      { command: 'remember', description: 'Simpan ke memori' },
+      { command: 'forget',   description: 'Hapus memori (semua atau /forget N)' },
+      { command: 'search',   description: 'Cari di memori' },
+      { command: 'skills',   description: 'List skill' },
+      { command: 'pwd',      description: 'Workspace aktif' },
+      { command: 'ls',       description: 'List isi workspace' },
+      { command: 'cd',       description: 'Pindah workspace' },
+      { command: 'projects', description: 'List project terdaftar' },
+      { command: 'git',      description: 'Shortcut git: /git status|log|diff' },
+      { command: 'jobs',     description: 'List scheduled job' },
+      { command: 'audit',    description: '10 audit entry terakhir' },
+      { command: 'export',   description: 'Export session: /export md|json|html' },
+      { command: 'clear',    description: 'Alias /new' }
+    ]);
+  } catch (e) {
+    console.error('setMyCommands gagal:', e.message);
+  }
+}
+
 // ── Launch ──────────────────────────────────────────────────────
+
+// Init notifications service supaya bisa kirim broadcast (webhook, scheduler)
+notifications.init({ bot });
 
 bot.launch().then(() => {
   console.log('✅ CPAMC Telegram Bot v3 aktif!');
   console.log(`   Model: ${process.env.MODEL || 'claude-sonnet-4-5'}`);
   console.log(`   Features: Voice=${!!process.env.OPENAI_API_KEY}, Users=${process.env.ALLOWED_USERS || 'all'}`);
+  setupBotCommands();
+
+  // Init scheduler kalau diaktifkan
+  if (process.env.ENABLE_SCHEDULER === 'true') {
+    const scheduler = require('../core/scheduler');
+    scheduler.init({ engine, notifications });
+    scheduler.start().catch(e => console.error('Scheduler start error:', e.message));
+  }
 });
 
 process.once('SIGINT', () => bot.stop('SIGINT'));

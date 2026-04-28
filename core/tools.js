@@ -1,7 +1,10 @@
 /**
  * CPAMC Tools v3
- * Sandbox tools for agentic execution
- * Security: all operations restricted to workspace directory
+ * Sandbox tools untuk eksekusi agentic.
+ *
+ * Setiap tool call wajib di-scope ke direktori workspace (default `/workspace`)
+ * untuk mencegah path traversal. Per-session workspace bisa dipilih dengan
+ * argumen `_workspace` (relative path dari WORKSPACE_ROOT).
  */
 
 const { exec } = require('child_process');
@@ -11,15 +14,28 @@ const util = require('util');
 
 const execAsync = util.promisify(exec);
 
-const WORKSPACE_DIR = path.join(__dirname, '..', 'workspace');
+const WORKSPACE_ROOT = path.join(__dirname, '..', 'workspace');
 
-if (!fs.existsSync(WORKSPACE_DIR)) {
-  fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+if (!fs.existsSync(WORKSPACE_ROOT)) {
+  fs.mkdirSync(WORKSPACE_ROOT, { recursive: true });
 }
 
-function resolvePath(targetPath) {
-  const resolved = path.resolve(WORKSPACE_DIR, targetPath || '');
-  if (!resolved.startsWith(WORKSPACE_DIR)) {
+function resolveCwd(workspace) {
+  if (!workspace || workspace === '.' || workspace === '/') return WORKSPACE_ROOT;
+  const resolved = path.resolve(WORKSPACE_ROOT, workspace);
+  if (!resolved.startsWith(WORKSPACE_ROOT)) {
+    throw new Error('Workspace keluar dari root yang diizinkan.');
+  }
+  if (!fs.existsSync(resolved)) {
+    fs.mkdirSync(resolved, { recursive: true });
+  }
+  return resolved;
+}
+
+function resolvePath(targetPath, workspace) {
+  const cwd = resolveCwd(workspace);
+  const resolved = path.resolve(cwd, targetPath || '');
+  if (!resolved.startsWith(WORKSPACE_ROOT)) {
     throw new Error('Akses ditolak. Hanya boleh mengakses folder workspace.');
   }
   return resolved;
@@ -28,11 +44,13 @@ function resolvePath(targetPath) {
 const tools = {
   execute_command: async (args) => {
     try {
-      const { command } = args;
+      const { command, _workspace } = args;
       if (!command) return "Error: Parameter 'command' tidak ditemukan.";
+      const cwd = resolveCwd(_workspace);
       const { stdout, stderr } = await execAsync(command, {
-        cwd: WORKSPACE_DIR,
-        timeout: 30000
+        cwd,
+        timeout: 30000,
+        maxBuffer: 5 * 1024 * 1024
       });
       let result = '';
       if (stdout) result += `STDOUT:\n${stdout}\n`;
@@ -45,12 +63,11 @@ const tools = {
 
   read_file: async (args) => {
     try {
-      const { filepath } = args;
+      const { filepath, _workspace } = args;
       if (!filepath) return "Error: Parameter 'filepath' tidak ditemukan.";
-      const fullPath = resolvePath(filepath);
+      const fullPath = resolvePath(filepath, _workspace);
       if (!fs.existsSync(fullPath)) return `Error: File ${filepath} tidak ditemukan.`;
       const content = fs.readFileSync(fullPath, 'utf8');
-      // Limit output to prevent huge responses
       if (content.length > 20000) {
         return content.slice(0, 20000) + '\n...[terpotong, file terlalu besar]';
       }
@@ -62,10 +79,10 @@ const tools = {
 
   write_file: async (args) => {
     try {
-      const { filepath, content } = args;
+      const { filepath, content, _workspace } = args;
       if (!filepath || content === undefined)
         return "Error: Parameter 'filepath' dan 'content' wajib diisi.";
-      const fullPath = resolvePath(filepath);
+      const fullPath = resolvePath(filepath, _workspace);
       const dir = path.dirname(fullPath);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -79,8 +96,8 @@ const tools = {
 
   list_dir: async (args) => {
     try {
-      const { dirpath = '.' } = args;
-      const fullPath = resolvePath(dirpath);
+      const { dirpath = '.', _workspace } = args;
+      const fullPath = resolvePath(dirpath, _workspace);
       if (!fs.existsSync(fullPath)) return `Error: Direktori ${dirpath} tidak ditemukan.`;
       const files = fs.readdirSync(fullPath, { withFileTypes: true });
       const result = files
@@ -99,9 +116,9 @@ const tools = {
 
   delete_file: async (args) => {
     try {
-      const { filepath } = args;
+      const { filepath, _workspace } = args;
       if (!filepath) return "Error: Parameter 'filepath' tidak ditemukan.";
-      const fullPath = resolvePath(filepath);
+      const fullPath = resolvePath(filepath, _workspace);
       if (!fs.existsSync(fullPath)) return `Error: File ${filepath} tidak ditemukan.`;
       fs.unlinkSync(fullPath);
       return `✓ File ${filepath} dihapus.`;
@@ -110,11 +127,12 @@ const tools = {
     }
   },
 
-  // Git operations (inspired by claude-code-telegram git_integration)
+  // Git operations
   git_status: async (args) => {
     try {
-      const { stdout } = await execAsync('git status --short', { cwd: WORKSPACE_DIR });
-      const { stdout: branch } = await execAsync('git branch --show-current', { cwd: WORKSPACE_DIR });
+      const cwd = resolveCwd(args._workspace);
+      const { stdout } = await execAsync('git status --short', { cwd });
+      const { stdout: branch } = await execAsync('git branch --show-current', { cwd });
       return `Branch: ${branch.trim()}\n${stdout || '(working directory clean)'}`;
     } catch (e) {
       return `Git error: ${e.message}`;
@@ -124,10 +142,8 @@ const tools = {
   git_log: async (args) => {
     try {
       const limit = args.limit || 10;
-      const { stdout } = await execAsync(
-        `git log --oneline -${limit}`,
-        { cwd: WORKSPACE_DIR }
-      );
+      const cwd = resolveCwd(args._workspace);
+      const { stdout } = await execAsync(`git log --oneline -${limit}`, { cwd });
       return stdout || '(no commits yet)';
     } catch (e) {
       return `Git error: ${e.message}`;
@@ -136,9 +152,10 @@ const tools = {
 
   git_diff: async (args) => {
     try {
-      const { filepath } = args;
+      const { filepath, _workspace } = args;
+      const cwd = resolveCwd(_workspace);
       const cmd = filepath ? `git diff ${filepath}` : 'git diff';
-      const { stdout } = await execAsync(cmd, { cwd: WORKSPACE_DIR });
+      const { stdout } = await execAsync(cmd, { cwd });
       if (!stdout) return '(no changes)';
       if (stdout.length > 10000) return stdout.slice(0, 10000) + '\n...[diff terpotong]';
       return stdout;
@@ -149,3 +166,6 @@ const tools = {
 };
 
 module.exports = tools;
+module.exports.WORKSPACE_ROOT = WORKSPACE_ROOT;
+module.exports.resolveCwd = resolveCwd;
+module.exports.resolvePath = resolvePath;

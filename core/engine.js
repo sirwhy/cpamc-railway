@@ -13,11 +13,13 @@
 const fetch  = require('node-fetch');
 require('dotenv').config();
 
-const db      = require('./db');
-const memory  = require('./memory');
-const skills  = require('./skills');
+const db        = require('./db');
+const memory    = require('./memory');
+const skills    = require('./skills');
 const RateLimiter = require('./rate_limiter');
-const tools   = require('./tools');
+const tools     = require('./tools');
+const audit     = require('./audit');
+const projects  = require('./projects');
 
 const CPAMC_URL   = process.env.CPAMC_BASE_URL || 'https://cli-proxy-api-production-9440.up.railway.app/v1';
 const CPAMC_KEY   = process.env.CPAMC_API_KEY  || 'dummy';
@@ -29,6 +31,18 @@ const modelDetector = require('./model_detector');
 
 // In-memory cache sesi (sinkron dengan DB)
 const sessionCache = {};
+
+// Cancellation token per user → tool loop bisa di-stop oleh user via /stop
+const cancellation = new Map();
+
+function requestCancel(userId) {
+  cancellation.set(String(userId), true);
+}
+function consumeCancel(userId) {
+  const v = cancellation.get(String(userId));
+  cancellation.delete(String(userId));
+  return Boolean(v);
+}
 
 function getModels() {
   if (!db.isReady()) return null;
@@ -69,6 +83,9 @@ async function loadSession(userId, platform = 'web') {
     history,
     activeSkills: meta?.activeSkills || [],
     messageCount: meta?.messageCount || 0,
+    verboseLevel: typeof meta?.verboseLevel === 'number' ? meta.verboseLevel : 1,
+    workspace: meta?.workspace || '.',
+    conversationMode: meta?.conversationMode || 'auto',
     createdAt: meta?.createdAt ? new Date(meta.createdAt).getTime() : Date.now(),
     lastActive: Date.now()
   };
@@ -98,7 +115,14 @@ async function saveSessionMeta(session) {
   if (M) {
     await M.Session.updateOne(
       { userId: session.userId },
-      { $set: { activeSkills: session.activeSkills, messageCount: session.messageCount, lastActive: new Date() } }
+      { $set: {
+          activeSkills: session.activeSkills,
+          messageCount: session.messageCount,
+          verboseLevel: session.verboseLevel,
+          workspace: session.workspace,
+          conversationMode: session.conversationMode,
+          lastActive: new Date()
+      } }
     ).catch(() => {});
   }
 }
@@ -131,7 +155,7 @@ function getSessionFromCache(userId) {
 async function buildSystemPrompt(session) {
   let sys = `Kamu adalah CPAMC AI - Asisten Cerdas Otonom yang powerful.
 Kamu bisa bertindak sebagai software engineer, analyst, creative writer, translator, dan lebih.
-Platform: ${session.platform} | Waktu: ${new Date().toLocaleString('id-ID')} | Model: ${await modelDetector.getActiveModel()}
+Platform: ${session.platform} | Workspace: ${session.workspace || '.'} | Waktu: ${new Date().toLocaleString('id-ID')} | Model: ${await modelDetector.getActiveModel()}
 
 == TOOLS TERSEDIA ==
 Gunakan tools berikut HANYA jika benar-benar diperlukan (jangan untuk pertanyaan biasa):
@@ -205,7 +229,111 @@ async function handleCommand(session, msg) {
 
   if (['/clear', '!clear'].includes(lower)) {
     await clearSessionDB(session.userId);
+    await audit.logCommand(session.userId, '/clear', [], { platform: session.platform });
     return { text: '✓ History chat dihapus dari database.', isCommand: true };
+  }
+
+  // /new — reset session (alias untuk /clear, mengikuti claude-code-telegram)
+  if (['/new', '!new'].includes(lower)) {
+    await clearSessionDB(session.userId);
+    await audit.logCommand(session.userId, '/new', [], { platform: session.platform });
+    return { text: '✨ Session baru dimulai. History sebelumnya dihapus.', isCommand: true };
+  }
+
+  // /stop — cancel running tool loop
+  if (['/stop', '!stop'].includes(lower)) {
+    requestCancel(session.userId);
+    await audit.logCommand(session.userId, '/stop', [], { platform: session.platform });
+    return { text: '🛑 Stop signal dikirim. Tool loop akan berhenti pada iterasi berikutnya.', isCommand: true };
+  }
+
+  // /verbose 0|1|2 — per-session verbosity
+  if (lower.startsWith('/verbose') || lower.startsWith('!verbose')) {
+    const parts = cmd.split(/\s+/);
+    const lvl = parseInt(parts[1]);
+    if (![0, 1, 2].includes(lvl)) {
+      return { text: `Level verbose saat ini: *${session.verboseLevel}*\n\nGunakan: /verbose 0 (quiet) | /verbose 1 (normal) | /verbose 2 (detailed)`, isCommand: true };
+    }
+    session.verboseLevel = lvl;
+    await saveSessionMeta(session);
+    await audit.logCommand(session.userId, '/verbose', [lvl], { platform: session.platform });
+    return { text: `✅ Verbose level di-set ke *${lvl}*`, isCommand: true };
+  }
+
+  // /pwd — workspace aktif
+  if (['/pwd', '!pwd'].includes(lower)) {
+    return { text: `📁 Workspace aktif: \`${session.workspace || '.'}\``, isCommand: true };
+  }
+
+  // /cd <path> — ganti workspace
+  if (lower.startsWith('/cd ') || lower.startsWith('!cd ')) {
+    const target = cmd.split(/\s+/).slice(1).join(' ').trim();
+    try {
+      const resolved = await projects.resolve(target);
+      // Simpan path relatif (dari WORKSPACE_ROOT)
+      const path = require('path');
+      const rel = path.relative(projects.WORKSPACE_ROOT, resolved) || '.';
+      session.workspace = rel;
+      await saveSessionMeta(session);
+      await audit.logCommand(session.userId, '/cd', [target], { platform: session.platform });
+      return { text: `✅ Pindah ke workspace: \`${rel}\``, isCommand: true };
+    } catch (e) {
+      return { text: `❌ ${e.message}`, isCommand: true };
+    }
+  }
+
+  // /ls — list isi workspace aktif
+  if (['/ls', '!ls'].includes(lower)) {
+    const out = await tools.list_dir({ dirpath: '.', _workspace: session.workspace });
+    return { text: `📂 *${session.workspace}*\n\`\`\`\n${out}\n\`\`\``, isCommand: true };
+  }
+
+  // /projects — list workspace registry
+  if (['/projects', '!projects'].includes(lower)) {
+    const list = await projects.list();
+    if (!list.length) return { text: '📁 Belum ada project terdaftar. Gunakan /cd <nama> untuk pindah folder, atau register via API.', isCommand: true };
+    const lines = list.map(p => `• *${p.name}* — \`${p.path}\` ${p.description ? `— ${p.description}` : ''}`).join('\n');
+    return { text: `📁 *Projects (${list.length}):*\n${lines}\n\nGunakan /cd <nama> untuk pindah.`, isCommand: true };
+  }
+
+  // /git — shortcut: /git status | /git log | /git diff
+  if (lower.startsWith('/git') || lower.startsWith('!git')) {
+    const sub = cmd.split(/\s+/).slice(1).join(' ').trim() || 'status';
+    let out = '';
+    if (sub === 'status' || sub === 's') {
+      out = await tools.git_status({ _workspace: session.workspace });
+    } else if (sub === 'log' || sub.startsWith('log')) {
+      const limit = parseInt(sub.split(/\s+/)[1]) || 10;
+      out = await tools.git_log({ limit, _workspace: session.workspace });
+    } else if (sub === 'diff' || sub.startsWith('diff')) {
+      const fp = sub.split(/\s+/)[1];
+      out = await tools.git_diff({ filepath: fp, _workspace: session.workspace });
+    } else {
+      out = `Sub-command tidak dikenal. Gunakan: /git status | /git log [N] | /git diff [file]`;
+    }
+    return { text: `📊 *git ${sub}*\n\`\`\`\n${out}\n\`\`\``, isCommand: true };
+  }
+
+  // /jobs — daftar scheduled jobs
+  if (['/jobs', '!jobs'].includes(lower)) {
+    const scheduler = require('./scheduler');
+    const jobs = await scheduler.listJobs();
+    if (!jobs.length) return { text: '⏰ Belum ada scheduled job. Tambah via API: POST /api/jobs', isCommand: true };
+    const lines = jobs.map(j => `${j.enabled ? '✅' : '❌'} *${j.name}* — \`${j.cronExpression}\` (id: ${j.jobId})`).join('\n');
+    return { text: `⏰ *Scheduled Jobs (${jobs.length}):*\n${lines}`, isCommand: true };
+  }
+
+  // /audit — lihat 10 audit entry terbaru untuk user ini
+  if (['/audit', '!audit'].includes(lower)) {
+    const entries = await audit.getRecent(session.userId, 10);
+    if (!entries.length) return { text: '📜 Belum ada entry audit untuk user ini.', isCommand: true };
+    const lines = entries.map(e => {
+      const t = new Date(e.timestamp).toLocaleString('id-ID');
+      const s = e.success ? '✓' : '✗';
+      const detail = typeof e.detail === 'string' ? e.detail : JSON.stringify(e.detail).slice(0, 80);
+      return `${s} _${t}_ — *${e.action}* ${detail}`;
+    }).join('\n');
+    return { text: `📜 *Audit (10 terakhir):*\n${lines}`, isCommand: true };
   }
 
   if (['/memory', '!memory'].includes(lower)) {
@@ -298,22 +426,35 @@ async function handleCommand(session, msg) {
   if (['/help', '!help'].includes(lower)) {
     return {
       text: `🤖 *CPAMC AI v3 - Help*\n\n` +
-        `*Commands:*\n` +
+        `*Session:*\n` +
+        `/new — mulai sesi baru (hapus history)\n` +
+        `/clear — alias /new\n` +
+        `/stop — hentikan tool loop yang sedang jalan\n` +
+        `/status — info engine & stats\n` +
+        `/verbose 0|1|2 — atur level verbose tool call\n\n` +
+        `*Memory & Skills:*\n` +
         `/skills — lihat semua skill\n` +
         `/skill <nama> — aktifkan/matikan skill\n` +
         `/memory — lihat memori\n` +
         `/remember <teks> — simpan ke memori\n` +
         `/forget [nomor] — hapus memori\n` +
-        `/search <query> — cari di memori\n` +
-        `/export [md|json|html] — export session\n` +
-        `/clear — hapus history chat\n` +
-        `/status — info engine & stats\n\n` +
+        `/search <query> — cari di memori\n\n` +
+        `*Workspace:*\n` +
+        `/pwd — workspace aktif\n` +
+        `/ls — list isi workspace\n` +
+        `/cd <name> — pindah ke workspace lain\n` +
+        `/projects — list project terdaftar\n` +
+        `/git status|log|diff — shortcut git\n\n` +
+        `*Automation:*\n` +
+        `/jobs — list scheduled job\n` +
+        `/audit — 10 audit entry terakhir\n` +
+        `/export [md|json|html] — export session\n\n` +
         `*File & Media:*\n` +
         `📎 Upload file → analisis otomatis\n` +
         `🖼️ Upload gambar → analisis visual\n` +
         `🎤 Kirim voice → transkripsi\n\n` +
         `*Agentic Mode:*\n` +
-        `Bot otomatis menggunakan tools untuk eksekusi kode, file, git`,
+        `Bot otomatis pakai tools untuk eksekusi kode, file, git, dll.`,
       isCommand: true
     };
   }
@@ -330,9 +471,15 @@ async function handleCommand(session, msg) {
 // ── Main Chat ─────────────────────────────────────────────────
 
 async function chat(userId, userMessage, options = {}) {
-  const { platform = 'web', onStatus, imageBase64 = null, imageType = null } = options;
+  const { platform = 'web', onStatus, imageBase64 = null, imageType = null, workspace } = options;
 
   const session = await loadSession(userId, platform);
+
+  // Override workspace dari options jika ada (e.g. scheduler)
+  if (workspace) session.workspace = workspace;
+
+  // Pastikan flag cancel ter-reset di awal
+  consumeCancel(userId);
 
   // Rate limiting untuk Telegram
   if (platform === 'telegram') {
@@ -426,6 +573,11 @@ async function chat(userId, userMessage, options = {}) {
     session.history.push({ role: 'assistant', content: reply });
     await saveMessage(userId, 'assistant', reply);
 
+    // Check stop signal sebelum lanjut tool loop
+    if (cancellation.get(String(userId))) {
+      break;
+    }
+
     // Check tool call
     const toolMatch = reply.match(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/);
     if (toolMatch) {
@@ -437,7 +589,10 @@ async function chat(userId, userMessage, options = {}) {
         }
 
         if (tools[toolData.name]) {
-          const toolResult = await tools[toolData.name](toolData.args || {});
+          // Inject per-session workspace
+          const toolArgs = { ...(toolData.args || {}), _workspace: session.workspace };
+          await audit.logToolCall(userId, toolData.name, toolData.args || {}, { platform });
+          const toolResult = await tools[toolData.name](toolArgs);
           const toolMsg = `<tool_response>\n${toolResult}\n</tool_response>\nSilakan lanjutkan atau berikan jawaban final.`;
           session.history.push({ role: 'user', content: toolMsg });
           await saveMessage(userId, 'user', toolMsg);
@@ -461,9 +616,17 @@ async function chat(userId, userMessage, options = {}) {
   }
 
   if (loopCount >= MAX_LOOPS) finalReply += '\n\n_[Sistem: Batas loop agentic tercapai]_';
+  if (consumeCancel(userId)) finalReply += '\n\n_[Sistem: Tool loop dihentikan oleh /stop]_';
 
   // Auto-extract memory
   await memory.autoExtract(userId, userMessage);
+
+  // Audit
+  await audit.log(userId, 'chat', {
+    loopCount,
+    historyLen: session.history.length,
+    workspace: session.workspace
+  }, { platform }).catch(() => {});
 
   return {
     text:      finalReply,
@@ -501,8 +664,11 @@ module.exports = {
   getStats,
   getSession:    (userId) => sessionCache[userId] || null,
   clearSession:  clearSessionDB,
+  requestCancel,
   memory,
   skills,
+  projects,
+  audit,
   db,
   loadSession
 };

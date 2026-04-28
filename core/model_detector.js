@@ -1,12 +1,19 @@
 /**
  * CPAMC Model Detector v3
- * Auto-detect semua model yang tersedia dari 9router (OpenAI-compatible /v1/models)
- * Tidak perlu setting MODEL di environment variables.
+ * Auto-detect semua model yang tersedia dari upstream OpenAI-compatible
+ * `/v1/models` endpoint.
+ *
+ * Compatible dengan:
+ *   - 9router (lokal, http://localhost:20128/v1) — model ID format `<alias>/<id>`
+ *     contoh: `openai/gpt-4o`, `anthropic/claude-sonnet-4-5`, `or/glm-4.5`
+ *   - Cloud proxy CPAMC (cli-proxy-api Railway) — model ID format bare
+ *     contoh: `claude-sonnet-4-5`, `gpt-4o`
+ *   - OpenRouter, OpenAI langsung, dll. (selama exposes /v1/models)
  *
  * Strategi pemilihan model:
- *  1. Jika MODEL diset di env → pakai itu (override manual)
+ *  1. Jika MODEL diset di env → pakai itu (override manual; bisa prefixed atau bare)
  *  2. Ambil daftar model dari /v1/models
- *  3. Pilih model terbaik berdasarkan priority list
+ *  3. Pilih model terbaik via priority list (prefix-aware matching)
  *  4. Refresh setiap 10 menit
  */
 
@@ -15,6 +22,13 @@ require('dotenv').config();
 
 const CPAMC_URL = process.env.CPAMC_BASE_URL || 'https://cli-proxy-api-production-9440.up.railway.app/v1';
 const CPAMC_KEY = process.env.CPAMC_API_KEY  || 'dummy';
+
+/**
+ * Detect 9router dari URL — supaya log lebih informatif
+ */
+function is9Router(url = CPAMC_URL) {
+  return /(:20128|9router)/i.test(url);
+}
 
 // Priority list — model dengan rank lebih tinggi lebih diutamakan
 // Urutan: paling powerful → paling ringan
@@ -76,25 +90,47 @@ async function fetchModels() {
 }
 
 /**
- * Pilih model terbaik dari daftar yang tersedia
+ * Strip provider prefix dari model ID 9router
+ *   `openai/gpt-4o`             -> `gpt-4o`
+ *   `anthropic/claude-sonnet-4-5` -> `claude-sonnet-4-5`
+ *   `or/glm-4.5`                  -> `glm-4.5`
+ *   `gpt-4o`                      -> `gpt-4o` (no-op untuk bare ID)
+ *   `combo-name`                  -> `combo-name`
+ */
+function baseModelId(id) {
+  if (typeof id !== 'string') return '';
+  // Ambil segmen terakhir setelah '/'
+  const parts = id.split('/');
+  return parts[parts.length - 1];
+}
+
+/**
+ * Pilih model terbaik dari daftar yang tersedia.
+ * Prefix-aware: support format `<provider>/<model>` (9router) maupun bare (`gpt-4o`).
  */
 function pickBestModel(available) {
   if (!available.length) return null;
 
-  // Cari di priority list
+  const lc = available.map(m => ({ raw: m, base: baseModelId(m).toLowerCase(), full: m.toLowerCase() }));
+
+  // 1) exact match pada full ID (`anthropic/claude-sonnet-4-5` === preferred)
+  // 2) match base ID setelah strip prefix (preferred `claude-sonnet-4-5` matches `anthropic/claude-sonnet-4-5`)
   for (const preferred of MODEL_PRIORITY) {
-    const found = available.find(m => m.toLowerCase() === preferred.toLowerCase());
-    if (found) return found;
+    const p = preferred.toLowerCase();
+    const exact = lc.find(m => m.full === p);
+    if (exact) return exact.raw;
+    const baseHit = lc.find(m => m.base === p);
+    if (baseHit) return baseHit.raw;
   }
 
-  // Fallback: cari yang mengandung kata kunci bagus
+  // 3) Keyword fallback (claude > gpt-4 > gemini > mistral)
   const keywords = ['claude', 'gpt-4', 'gemini', 'mistral'];
   for (const kw of keywords) {
-    const found = available.find(m => m.toLowerCase().includes(kw));
-    if (found) return found;
+    const found = lc.find(m => m.base.includes(kw) || m.full.includes(kw));
+    if (found) return found.raw;
   }
 
-  // Fallback terakhir: ambil model pertama
+  // 4) Fallback terakhir: ambil model pertama
   return available[0];
 }
 
@@ -115,7 +151,8 @@ async function getActiveModel(forceRefresh = false) {
     }
   }
 
-  return selectedModel || 'claude-sonnet-4-5'; // hardcoded fallback
+  // Hardcoded fallback bila /v1/models tidak bisa diakses sama sekali
+  return selectedModel || 'claude-sonnet-4-5';
 }
 
 /**
@@ -142,12 +179,14 @@ function setModel(modelId) {
  */
 function getInfo() {
   return {
-    selected:   selectedModel,
-    available:  cachedModels,
-    total:      cachedModels.length,
-    lastFetch:  lastFetch ? new Date(lastFetch).toISOString() : null,
-    isManual:   !!process.env.MODEL,
-    source:     process.env.MODEL ? 'env' : 'auto-detect'
+    selected:    selectedModel,
+    available:   cachedModels,
+    total:       cachedModels.length,
+    lastFetch:   lastFetch ? new Date(lastFetch).toISOString() : null,
+    isManual:    !!process.env.MODEL,
+    source:      process.env.MODEL ? 'env' : 'auto-detect',
+    upstream:    CPAMC_URL,
+    is9Router:   is9Router()
   };
 }
 
@@ -159,4 +198,4 @@ setInterval(() => {
   getActiveModel(true).catch(() => {});
 }, CACHE_TTL);
 
-module.exports = { getActiveModel, getAllModels, setModel, getInfo, fetchModels };
+module.exports = { getActiveModel, getAllModels, setModel, getInfo, fetchModels, baseModelId, is9Router, pickBestModel };

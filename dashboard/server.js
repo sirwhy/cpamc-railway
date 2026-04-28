@@ -14,6 +14,11 @@ const db = require('../core/db');
 const engine = require('../core/engine');
 const sessionExport = require('../core/session_export');
 const modelDetector = require('../core/model_detector');
+const audit = require('../core/audit');
+const webhook = require('../core/webhook');
+const scheduler = require('../core/scheduler');
+const notifications = require('../core/notifications');
+const projects = require('../core/projects');
 
 // Init MongoDB dulu sebelum terima request
 db.connect();
@@ -24,6 +29,11 @@ const wss = new WebSocketServer({ server });
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
+
+// IMPORTANT: webhook endpoints butuh raw body untuk verifikasi HMAC,
+// jadi mount mereka SEBELUM express.json().
+webhook.mount(app, { engine });
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/workspace', express.static(path.join(__dirname, '..', 'workspace')));
@@ -46,8 +56,13 @@ app.post('/api/models/select', async (req, res) => {
   res.json({ ok: true, model });
 });
 
-app.get('/api/status', (req, res) => {
-  res.json({ ok: true, version: '3.0.0', stats: engine.getStats() });
+app.get('/api/status', async (req, res) => {
+  try {
+    const stats = await engine.getStats();
+    res.json({ ok: true, version: '3.0.0', stats });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 app.post('/api/chat', async (req, res) => {
@@ -72,42 +87,42 @@ app.get('/api/skills', async (req, res) => {
   res.json(await engine.skills.list());
 });
 
-app.post('/api/skills', (req, res) => {
+app.post('/api/skills', async (req, res) => {
   try {
-    engine.skills.install(req.body);
+    await engine.skills.install(req.body);
     res.json({ ok: true, message: `Skill "${req.body.name}" berhasil diinstall` });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
 });
 
-app.delete('/api/skills/:name', (req, res) => {
-  engine.skills.uninstall(decodeURIComponent(req.params.name));
+app.delete('/api/skills/:name', async (req, res) => {
+  await engine.skills.uninstall(decodeURIComponent(req.params.name));
   res.json({ ok: true });
 });
 
 // Memory API
-app.get('/api/memory/:userId', (req, res) => {
-  res.json(engine.memory.getAll(req.params.userId));
+app.get('/api/memory/:userId', async (req, res) => {
+  res.json(await engine.memory.getAll(req.params.userId));
 });
 
-app.post('/api/memory/:userId', (req, res) => {
-  const id = engine.memory.save(req.params.userId, req.body.content, 'manual');
+app.post('/api/memory/:userId', async (req, res) => {
+  const id = await engine.memory.save(req.params.userId, req.body.content, 'manual');
   res.json({ ok: true, id });
 });
 
-app.delete('/api/memory/:userId', (req, res) => {
-  engine.memory.deleteAll(req.params.userId);
+app.delete('/api/memory/:userId', async (req, res) => {
+  await engine.memory.deleteAll(req.params.userId);
   res.json({ ok: true });
 });
 
-app.delete('/api/memory/:userId/:id', (req, res) => {
-  engine.memory.delete(req.params.id);
+app.delete('/api/memory/:userId/:id', async (req, res) => {
+  await engine.memory.delete(req.params.id);
   res.json({ ok: true });
 });
 
-app.get('/api/memory/:userId/search/:query', (req, res) => {
-  const results = engine.memory.search(req.params.userId, req.params.query);
+app.get('/api/memory/:userId/search/:query', async (req, res) => {
+  const results = await engine.memory.search(req.params.userId, req.params.query);
   res.json(results);
 });
 
@@ -127,6 +142,79 @@ app.get('/api/session/:userId', async (req, res) => {
 
 app.delete('/api/session/:userId', (req, res) => {
   engine.clearSession(req.params.userId);
+  res.json({ ok: true });
+});
+
+// Stop running tool loop for a session
+app.post('/api/session/:userId/stop', (req, res) => {
+  engine.requestCancel(req.params.userId);
+  res.json({ ok: true });
+});
+
+// ── Audit log API ──────────────────────────────────────────────
+app.get('/api/audit/:userId', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 50, 500);
+  const entries = await audit.getRecent(req.params.userId, limit);
+  res.json(entries);
+});
+
+app.get('/api/audit/stats', async (req, res) => {
+  res.json(await audit.stats());
+});
+
+// ── Projects (workspace registry) API ──────────────────────────
+app.get('/api/projects', async (req, res) => {
+  res.json(await projects.list());
+});
+
+app.post('/api/projects', async (req, res) => {
+  try {
+    await projects.register(req.body);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/api/projects/:name', async (req, res) => {
+  await projects.unregister(decodeURIComponent(req.params.name));
+  res.json({ ok: true });
+});
+
+// ── Scheduled Jobs API ─────────────────────────────────────────
+app.get('/api/jobs', async (req, res) => {
+  res.json(await scheduler.listJobs());
+});
+
+app.post('/api/jobs', async (req, res) => {
+  try {
+    const jobId = await scheduler.addJob(req.body);
+    res.json({ ok: true, jobId });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/api/jobs/:jobId', async (req, res) => {
+  await scheduler.removeJob(req.params.jobId);
+  res.json({ ok: true });
+});
+
+app.post('/api/jobs/:jobId/toggle', async (req, res) => {
+  const enabled = req.body.enabled !== false;
+  await scheduler.toggleJob(req.params.jobId, enabled);
+  res.json({ ok: true });
+});
+
+// ── Notifications API (proactive broadcast) ────────────────────
+app.post('/api/notify', async (req, res) => {
+  const { chatId, text } = req.body;
+  if (!text) return res.status(400).json({ error: 'text wajib diisi' });
+  if (chatId) {
+    await notifications.send(chatId, text);
+  } else {
+    await notifications.broadcast(text);
+  }
   res.json({ ok: true });
 });
 
@@ -189,15 +277,27 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
   } catch (e) {
     console.error('❌ Telegram Bot gagal:', e.message);
   }
+} else if (process.env.ENABLE_SCHEDULER === 'true') {
+  // Tanpa bot tetap bisa jalanin scheduler buat job non-Telegram
+  scheduler.init({ engine, notifications });
+  scheduler.start().catch(e => console.error('Scheduler start error:', e.message));
 }
 
 // ── Start Server ───────────────────────────────────────────────
 
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', async () => {
   console.log(`✅ CPAMC AI Server v3 jalan di port ${PORT}`);
   console.log(`   Dashboard : http://localhost:${PORT}`);
-  console.log(`   Model     : ${process.env.MODEL || 'claude-sonnet-4-5'}`);
-  console.log(`   API       : ${process.env.CPAMC_BASE_URL || '(tidak diset)'}`);
+  const apiUrl = process.env.CPAMC_BASE_URL || '(tidak diset)';
+  const upstream = require('../core/model_detector');
+  console.log(`   API       : ${apiUrl}${upstream.is9Router() ? ' (9router)' : ''}`);
+  try {
+    const active = await upstream.getActiveModel(true);
+    const info   = upstream.getInfo();
+    console.log(`   Model     : ${active}${info.isManual ? ' (env)' : ` (auto, dari ${info.total} model)`}`);
+  } catch {
+    console.log(`   Model     : ${process.env.MODEL || 'claude-sonnet-4-5'} (fallback)`);
+  }
   console.log(`   WebSocket : ws://localhost:${PORT}`);
 });
 

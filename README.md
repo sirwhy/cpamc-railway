@@ -24,46 +24,35 @@ Bot AI berbasis Claude yang powerful, di-deploy di Railway. Versi 3 ini adalah *
 | **WebSocket support** | ❌ | ✅ |
 | **Paste image** | ❌ | ✅ |
 
-## 🍃 Setup MongoDB Atlas (GitHub Student)
+## 🍃 Setup MongoDB Atlas + Railway (GitHub Student)
 
-Karena kamu punya MongoDB Atlas via GitHub Student Pack, ikuti langkah berikut:
+Panduan lengkap step-by-step ada di **[docs/RAILWAY_MONGODB_SETUP.md](docs/RAILWAY_MONGODB_SETUP.md)** — dari aktivasi GitHub Student Pack, buat cluster Atlas, whitelist IP Railway, set connection string, sampai verifikasi koneksi & troubleshooting.
 
-### 1. Buat Cluster
-1. Login ke [cloud.mongodb.com](https://cloud.mongodb.com)
-2. Klik **New Project** → beri nama `cpamc`
-3. **Build a Cluster** → pilih **M0 Free** (atau M10 kalau pakai kredit student)
-4. Pilih region terdekat (Singapore untuk Indonesia)
+**TL;DR:**
 
-### 2. Buat Database User
-1. **Security → Database Access** → Add New Database User
-2. Username: `cpamc`, Password: (generate yang kuat, simpan)
-3. Role: **Atlas Admin** atau **Read and write to any database**
-
-### 3. Whitelist IP
-1. **Security → Network Access** → Add IP Address
-2. Pilih **Allow access from anywhere** (`0.0.0.0/0`) untuk Railway
-
-### 4. Dapatkan Connection String
-1. **Deployment → Database** → klik **Connect**
-2. Pilih **Drivers** → Node.js
-3. Copy connection string, ganti `<password>` dengan password user tadi
-4. Contoh: `mongodb+srv://cpamc:PASSWORD@cluster0.xxxxx.mongodb.net/cpamc`
-
-### 5. Set di Railway
-Di Railway dashboard → Settings → Variables:
-```
-MONGODB_URI=mongodb+srv://cpamc:PASSWORD@cluster0.xxxxx.mongodb.net/cpamc
-```
+1. Aktivasi [GitHub Student Developer Pack](https://education.github.com/pack) → ambil benefit **MongoDB Atlas**.
+2. Buat cluster M0 Free di Atlas (region Singapore untuk Indonesia).
+3. Buat database user (`cpamc`) + whitelist `0.0.0.0/0` (Railway IP outbound dinamis).
+4. Copy connection string, contoh:
+   ```
+   mongodb+srv://cpamc:PASSWORDMU@cluster.abcde.mongodb.net/cpamc?retryWrites=true&w=majority
+   ```
+5. Set di Railway → Settings → Variables: `MONGODB_URI=...`.
+6. Redeploy. Cek log harus muncul `✅ MongoDB terhubung`.
 
 ### ✅ Yang Disimpan di MongoDB
-| Data | Persisten? |
-|------|-----------|
-| Memory (facts, notes) | ✅ Selamanya |
-| History percakapan | ✅ Max 60 pesan terakhir per user |
-| Custom skills | ✅ Selamanya |
-| Session metadata | ✅ (skills aktif, statistik) |
+| Collection | Isi | Persisten? |
+|------------|------|-----------|
+| `memories` | Fakta/preferensi user (manual + auto-extract) | ✅ Selamanya |
+| `messages` | Riwayat chat per user | ✅ Max 60 pesan terakhir per user |
+| `sessions` | Skill aktif, verbose level, workspace per user | ✅ |
+| `skills` | Custom skill yang di-install | ✅ |
+| `auditlogs` | Audit trail command + tool call | ✅ |
+| `webhookevents` | Dedup webhook GitHub/generic | ✅ |
+| `scheduledjobs` | Cron job persisten | ✅ |
+| `projects` | Workspace registry multi-project | ✅ |
 
-Jika `MONGODB_URI` tidak diset, semua data otomatis fallback ke file JSON lokal.
+Jika `MONGODB_URI` tidak diset, semua data otomatis fallback ke file JSON lokal (⚠️ hilang saat redeploy).
 
 
 
@@ -80,16 +69,23 @@ npm install
 Copy `.env.example` ke `.env` dan isi:
 
 ```env
-# WAJIB
+# WAJIB — pilih salah satu upstream LLM:
+#   A. Cloud proxy CPAMC default
 CPAMC_BASE_URL=https://cli-proxy-api-production-9440.up.railway.app/v1
+#   B. 9router lokal (`npm i -g 9router && 9router`) → http://localhost:20128/v1
+#   C. 9router remote / OpenRouter / OpenAI langsung
 CPAMC_API_KEY=dummy
 TELEGRAM_BOT_TOKEN=your_token_here
 
 # OPSIONAL
 OPENAI_API_KEY=sk-...     # untuk transkripsi voice
 ALLOWED_USERS=123456789   # whitelist user ID
-MODEL=claude-sonnet-4-5
+MODEL=                    # kosongkan = auto-detect best dari /v1/models
+                          # boleh bare (`claude-sonnet-4-5`) atau prefixed (`anthropic/claude-sonnet-4-5`)
 ```
+
+> **Pakai 9router?** CPAMC v3.1 sudah prefix-aware (`<provider>/<model>`).
+> Panduan lengkap: **[docs/9ROUTER_SETUP.md](docs/9ROUTER_SETUP.md)**.
 
 ### 3. Push ke Railway
 
@@ -101,19 +97,48 @@ Set environment variables di **Settings > Variables**.
 
 ### Commands
 
+Daftar lengkap (juga muncul di Telegram saat user ketik `/`) ada di **[docs/FEATURES.md](docs/FEATURES.md)**.
+
+**Sesi:**
+
 | Command | Fungsi |
 |---------|--------|
 | `/start` | Sambutan & panduan |
 | `/help` | Bantuan lengkap |
+| `/new` | Mulai sesi baru (hapus history) |
+| `/clear` | Alias `/new` |
+| `/stop` | Hentikan tool loop yang sedang jalan |
+| `/status` | Info engine & stats |
+| `/verbose 0\|1\|2` | Atur level verbose tool call |
+
+**Memory & Skills:**
+
+| Command | Fungsi |
+|---------|--------|
 | `/skills` | Lihat semua skill |
 | `/skill <nama>` | Aktifkan/matikan skill |
 | `/memory` | Lihat memori tersimpan |
 | `/remember <teks>` | Simpan ke memori |
-| `/forget [nomor]` | Hapus memori |
+| `/forget [N]` | Hapus memori |
 | `/search <query>` | Cari di memori |
+
+**Workspace & Git:**
+
+| Command | Fungsi |
+|---------|--------|
+| `/pwd` | Workspace aktif |
+| `/ls` | List isi workspace |
+| `/cd <name>` | Pindah ke workspace lain |
+| `/projects` | List project terdaftar |
+| `/git status\|log\|diff` | Shortcut git |
+
+**Automation & Audit:**
+
+| Command | Fungsi |
+|---------|--------|
+| `/jobs` | List scheduled cron job |
+| `/audit` | 10 audit entry terakhir |
 | `/export [md\|json\|html]` | Export session |
-| `/status` | Info engine & stats |
-| `/clear` | Hapus history chat |
 
 ### Media
 
@@ -160,15 +185,51 @@ curl -X POST http://localhost:3000/api/skills \
 ## 📊 API Endpoints
 
 ```
-GET  /api/status              — stats engine
-POST /api/chat                — kirim pesan
-GET  /api/skills              — list skills
-POST /api/skills              — install skill
-DELETE /api/skills/:name      — hapus skill
-GET  /api/memory/:userId      — get memori
-POST /api/memory/:userId      — tambah memori
-DELETE /api/memory/:userId    — hapus semua memori
-GET  /api/session/:userId/export?format=markdown  — export session
+# Core
+GET    /api/status              — stats engine
+POST   /api/chat                — kirim pesan
+GET    /api/models              — list model dari 9router
+POST   /api/models/select       — ganti model aktif
+
+# Skills
+GET    /api/skills              — list skills
+POST   /api/skills              — install skill
+DELETE /api/skills/:name        — hapus skill
+
+# Memory
+GET    /api/memory/:userId      — get memori
+POST   /api/memory/:userId      — tambah memori
+DELETE /api/memory/:userId      — hapus semua memori
+GET    /api/memory/:userId/search/:query  — cari memori
+
+# Session
+GET    /api/session/:userId     — metadata sesi
+DELETE /api/session/:userId     — reset sesi
+POST   /api/session/:userId/stop — cancel tool loop
+GET    /api/session/:userId/export?format=markdown  — export
+
+# Audit
+GET    /api/audit/:userId       — 50 entry terakhir
+GET    /api/audit/stats         — total + error count
+
+# Projects (workspace registry)
+GET    /api/projects            — list workspace
+POST   /api/projects            — register workspace baru
+DELETE /api/projects/:name      — unregister
+
+# Scheduled Jobs (cron)
+GET    /api/jobs                — list job
+POST   /api/jobs                — tambah job
+DELETE /api/jobs/:jobId         — hapus job
+POST   /api/jobs/:jobId/toggle  — enable/disable
+
+# Notifications
+POST   /api/notify              — broadcast ke Telegram
+
+# Webhooks (incoming)
+POST   /webhooks/github         — GitHub HMAC-SHA256
+POST   /webhooks/:provider      — generic Bearer token
+GET    /api/webhooks/recent     — list event terakhir
 ```
 
 ## 📁 Struktur Proyek
@@ -176,21 +237,32 @@ GET  /api/session/:userId/export?format=markdown  — export session
 ```
 cpamc-railway-v3/
 ├── bot/
-│   └── telegram.js          # Bot Telegram enhanced
+│   └── telegram.js           # Bot Telegram (text/photo/doc/voice + commands)
 ├── core/
-│   ├── engine.js            # Agentic engine utama
-│   ├── memory.js            # Memory manager
-│   ├── skills.js            # Skill manager
-│   ├── tools.js             # Tools (bash, file, git)
-│   ├── rate_limiter.js      # Rate limiting
-│   └── session_export.js    # Export session
+│   ├── engine.js             # Agentic engine + agentic loop + commands
+│   ├── db.js                 # MongoDB connection (mongoose)
+│   ├── models.js             # Mongoose schemas (8 collections)
+│   ├── memory.js             # Memory manager
+│   ├── skills.js             # Skill manager (built-in + MongoDB custom)
+│   ├── tools.js              # Tools (bash, file, git) sandbox per workspace
+│   ├── projects.js           # Workspace registry (multi-project)
+│   ├── rate_limiter.js       # Token-bucket rate limiter
+│   ├── session_export.js     # Export MD/JSON/HTML
+│   ├── audit.js              # Persistent audit trail
+│   ├── webhook.js            # Express webhook routes (GitHub HMAC + Bearer)
+│   ├── scheduler.js          # node-cron + persisted jobs
+│   ├── notifications.js      # Rate-limited Telegram broadcaster
+│   └── model_detector.js     # Auto-detect model dari 9router
 ├── dashboard/
-│   ├── server.js            # Express + WebSocket
+│   ├── server.js             # Express + WebSocket + REST API
 │   └── public/
-│       └── index.html       # Web dashboard
-├── skills/                  # Built-in skills (JSON)
-├── data/                    # User data (auto-created)
-├── workspace/               # Sandbox untuk tools (auto-created)
+│       └── index.html        # Web dashboard
+├── docs/
+│   ├── RAILWAY_MONGODB_SETUP.md  # Panduan lengkap setup
+│   └── FEATURES.md               # Reference fitur
+├── skills/                   # Built-in skills (JSON)
+├── data/                     # User data fallback (auto-created)
+├── workspace/                # Sandbox tool (auto-created)
 ├── .env.example
 ├── railway.json
 └── package.json
