@@ -55,17 +55,16 @@ async def run(job: Job, source: Path) -> Dict[str, Path]:
         )
 
     # demucs writes to {out_root}/{model}/{stem_track}/*.wav
+    # 4-stem split (vocals/drums/bass/other); we synthesize no_vocals
+    # ourselves below to control the mix instead of using --two-stems.
     cmd = [
         demucs_bin,
         "-n",
         config.DEMUCS_MODEL,
-        "--two-stems",
-        "vocals" if False else "",  # disabled — we want 4-stem split for stems.zip
         "-o",
         str(out_root),
         str(source),
     ]
-    cmd = [c for c in cmd if c]
     await _run(cmd)
 
     # Demucs naming: out_root / DEMUCS_MODEL / <source stem name> / *.wav

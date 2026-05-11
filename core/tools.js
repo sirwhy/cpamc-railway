@@ -263,7 +263,8 @@ const tools = {
             summary.media_delivery_errors.push({ filename: art.filename, error: artErr.message });
           }
         }
-        summary.artifacts_delivered = data.artifacts.length;
+        const failed = summary.media_delivery_errors ? summary.media_delivery_errors.length : 0;
+        summary.artifacts_delivered = data.artifacts.length - failed;
       } else if (Array.isArray(data.artifacts)) {
         summary.artifacts = data.artifacts.map(a => ({
           kind: a.kind,
