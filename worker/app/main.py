@@ -15,6 +15,7 @@ Routes (all require Bearer auth except ``/healthz``):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
 import shutil
@@ -60,13 +61,48 @@ VERSION = "0.1.0"
 app = FastAPI(title="Hermes Worker", version=VERSION)
 
 
+_GC_INTERVAL_SEC = 3600  # 1h is fine; TTL is in hours and disk grows slowly
+
+
+async def _gc_loop() -> None:
+    """Periodically delete finished jobs older than HERMES_JOB_TTL_HOURS."""
+    while True:
+        try:
+            await asyncio.sleep(_GC_INTERVAL_SEC)
+            removed = job_manager.gc()
+            if removed:
+                log.info("gc: removed %d expired job(s)", removed)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # pragma: no cover — never let GC kill the loop
+            log.exception("gc loop iteration failed")
+
+
 @app.on_event("startup")
 async def _startup() -> None:
     job_manager.set_runner(run_pipeline)
     job_manager.load_persisted()
     await voices.initialize()
     await job_manager.start()
+    # Run one GC sweep immediately so restarts also clean up stale jobs,
+    # then schedule the recurring loop.
+    try:
+        job_manager.gc()
+    except Exception:
+        log.exception("initial gc sweep failed")
+    app.state.gc_task = asyncio.create_task(_gc_loop())
     log.info("hermes worker %s ready (data=%s)", VERSION, config.DATA_DIR)
+
+
+@app.on_event("shutdown")
+async def _shutdown() -> None:
+    task = getattr(app.state, "gc_task", None)
+    if task is not None:
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 @app.get("/healthz", response_model=HealthResponse)

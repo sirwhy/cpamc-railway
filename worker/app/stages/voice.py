@@ -215,6 +215,13 @@ async def run(
         shutil.copy2(candidate, final_vocal)
         return final_vocal
 
+    if not config.ENABLE_RVC:
+        log.warning(
+            "RVC disabled via HERMES_ENABLE_RVC=false; skipping voice conversion."
+        )
+        shutil.copy2(candidate, final_vocal)
+        return final_vocal
+
     voice = voices.get_voice(target)
     if voice is None or not voice.model_path:
         raise RuntimeError(
