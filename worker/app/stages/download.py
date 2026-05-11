@@ -7,11 +7,14 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from .. import config
 from ..jobs import Job
 
 log = logging.getLogger("hermes.stage.download")
+
+_ALLOWED_URL_SCHEMES = frozenset({"http", "https"})
 
 
 def _which(binary: str) -> Optional[str]:
@@ -52,8 +55,18 @@ async def run(job: Job) -> Path:
 
     # --- Branch A: pre-uploaded file via /v1/upload --------------------
     if req.source_file_id:
-        upload_path = config.CACHE_DIR / "uploads" / f"{req.source_file_id}"
-        if not upload_path.exists():
+        # Strip any directory components and resolve to confirm the file
+        # really lives under uploads_root (defence against ../ traversal).
+        safe_name = Path(req.source_file_id).name
+        uploads_root = (config.CACHE_DIR / "uploads").resolve()
+        upload_path = (uploads_root / safe_name).resolve()
+        try:
+            upload_path.relative_to(uploads_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Invalid source_file_id '{req.source_file_id}': path traversal rejected."
+            ) from exc
+        if not upload_path.exists() or not upload_path.is_file():
             raise RuntimeError(
                 f"source_file_id '{req.source_file_id}' not found in upload cache."
             )
@@ -64,11 +77,20 @@ async def run(job: Job) -> Path:
 
     # --- Branch B: URL via yt-dlp -------------------------------------
     if req.source_url:
+        # Reject non-http(s) schemes — yt-dlp also supports file:// and
+        # local paths which would let a malicious caller read disk.
+        parsed = urlparse(req.source_url)
+        if parsed.scheme.lower() not in _ALLOWED_URL_SCHEMES:
+            raise RuntimeError(
+                f"source_url scheme '{parsed.scheme}' not allowed (use http/https)."
+            )
         if not _which("yt-dlp"):
             raise RuntimeError(
                 "yt-dlp not installed on worker. Run: pip install yt-dlp"
             )
         out_template = str(out_dir / "source.%(ext)s")
+        # NOTE: pass URL after `--` so yt-dlp won't interpret a hostile
+        # leading-dash URL as a flag (e.g. --batch-file, --exec).
         cmd = [
             "yt-dlp",
             "--no-playlist",
@@ -83,6 +105,7 @@ async def run(job: Job) -> Path:
             "0",
             "-o",
             out_template,
+            "--",
             req.source_url,
         ]
         await _run(cmd, timeout=600)
