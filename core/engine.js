@@ -153,6 +153,9 @@ function getSessionFromCache(userId) {
 // ── System Prompt ─────────────────────────────────────────────
 
 async function buildSystemPrompt(session) {
+  const hermes = require('./hermes');
+  const hermesReady = hermes.isConfigured();
+
   let sys = `Kamu adalah CPAMC AI - Asisten Cerdas Otonom yang powerful.
 Kamu bisa bertindak sebagai software engineer, analyst, creative writer, translator, dan lebih.
 Platform: ${session.platform} | Workspace: ${session.workspace || '.'} | Waktu: ${new Date().toLocaleString('id-ID')} | Model: ${await modelDetector.getActiveModel()}
@@ -183,6 +186,32 @@ Gunakan tools berikut HANYA jika benar-benar diperlukan (jangan untuk pertanyaan
 
 8. git_diff - Lihat perubahan file
    args: {"filepath": "optional"}
+
+== HERMES TOOLS (music producer; worker ${hermesReady ? 'READY' : 'NOT CONFIGURED'}) ==
+Hanya panggil saat user benar-benar minta AI Cover / Translation Cover / voice clone / stems separation.
+${hermesReady ? '' : '⚠️ Worker belum dikonfigurasi — semua tool hermes_* akan return error. Beri tahu user: admin perlu set HERMES_WORKER_URL & HERMES_WORKER_TOKEN di Railway env.\n'}
+9. hermes_voices - List voice RVC tersedia di worker registry
+   args: {}
+
+10. hermes_cover - Submit job produksi cover. Return job_id; poll hermes_status berikutnya.
+    args: {"source_url": "<YT/audio URL atau null>", "source_file_id": "<Telegram file_id atau null>",
+           "mode": "ai_cover|translation_cover|stems_only|transcribe_only",
+           "target_language": "<id|en|ru|ja|...>", "voice_target": "preserve_original|<voice_name>|none",
+           "voice_pitch_shift": 0, "voice_strength": 0.75,
+           "output_bundle": ["mp3","stems","lyrics","midi"]}
+
+11. hermes_status - Poll job. Saat status=done, audio & file pendamping otomatis ter-push ke Telegram.
+    args: {"job_id": "<dari hermes_cover>"}
+
+12. hermes_list_jobs - List job-job user
+    args: {"limit": 10}
+
+13. hermes_cancel_job - Cancel job yang masih queued/running
+    args: {"job_id": "..."}
+
+14. hermes_upload_voice - Daftarkan voice RVC baru ke registry (advanced)
+    args: {"name": "...", "model_url": "https://...pth", "index_url": "https://...index (opsional)",
+           "language_hint": "id|en|...", "description": "..."}
 
 == FORMAT TOOL CALL ==
 Untuk memanggil tool, balas HANYA dengan format XML ini (tanpa teks lain):
@@ -471,7 +500,7 @@ async function handleCommand(session, msg) {
 // ── Main Chat ─────────────────────────────────────────────────
 
 async function chat(userId, userMessage, options = {}) {
-  const { platform = 'web', onStatus, imageBase64 = null, imageType = null, workspace } = options;
+  const { platform = 'web', onStatus, onMedia, imageBase64 = null, imageType = null, workspace } = options;
 
   const session = await loadSession(userId, platform);
 
@@ -589,8 +618,13 @@ async function chat(userId, userMessage, options = {}) {
         }
 
         if (tools[toolData.name]) {
-          // Inject per-session workspace
-          const toolArgs = { ...(toolData.args || {}), _workspace: session.workspace };
+          // Inject per-session workspace + user id + media callback (for hermes_*)
+          const toolArgs = {
+            ...(toolData.args || {}),
+            _workspace: session.workspace,
+            _userId: userId,
+            _onMedia: onMedia
+          };
           await audit.logToolCall(userId, toolData.name, toolData.args || {}, { platform });
           const toolResult = await tools[toolData.name](toolArgs);
           const toolMsg = `<tool_response>\n${toolResult}\n</tool_response>\nSilakan lanjutkan atau berikan jawaban final.`;

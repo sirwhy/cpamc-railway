@@ -1,0 +1,22 @@
+services:
+  hermes:
+    build: .
+    container_name: hermes-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      HERMES_HOST: "0.0.0.0"
+      HERMES_PORT: "8000"
+      HERMES_DATA_DIR: "/data"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

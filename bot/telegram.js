@@ -367,6 +367,35 @@ bot.action('qa_note_code', async ctx => {
 
 // ── Core Chat Handler ──────────────────────────────────────────
 
+/**
+ * Push a media artifact (audio / document / voice) back to the Telegram chat.
+ * Called by hermes_status when a cover job completes — bot streams worker
+ * artifacts (mp3, stems.zip, lyrics.srt, melody.mid) straight to the user.
+ */
+async function deliverMedia(ctx, payload) {
+  if (!payload || !payload.buffer) return;
+  const { type = 'document', filename = 'artifact.bin', mime_type, caption = '' } = payload;
+  const source = { source: payload.buffer, filename };
+  try {
+    if (type === 'audio') {
+      await ctx.replyWithAudio(source, { caption, parse_mode: 'Markdown' });
+    } else if (type === 'voice') {
+      await ctx.replyWithVoice(source, { caption, parse_mode: 'Markdown' });
+    } else {
+      await ctx.replyWithDocument(source, { caption, parse_mode: 'Markdown' });
+    }
+  } catch (e) {
+    // Markdown parse error → retry tanpa parse_mode
+    try {
+      if (type === 'audio') await ctx.replyWithAudio(source, { caption });
+      else if (type === 'voice') await ctx.replyWithVoice(source, { caption });
+      else await ctx.replyWithDocument(source, { caption });
+    } catch (e2) {
+      console.error('deliverMedia error:', e2.message);
+    }
+  }
+}
+
 async function handleChat(ctx, userText, extras = {}) {
   const userId = ctx.from.id.toString();
   const streamer = new DraftStreamer(ctx);
@@ -379,6 +408,12 @@ async function handleChat(ctx, userText, extras = {}) {
       onStatus: async (msg) => {
         await ctx.sendChatAction('typing');
         await streamer.update(`⚙️ ${msg}`);
+      },
+      onMedia: async (payload) => {
+        try {
+          await ctx.sendChatAction(payload.type === 'audio' ? 'upload_voice' : 'upload_document');
+        } catch (_) {}
+        await deliverMedia(ctx, payload);
       },
       ...extras
     });

@@ -1,0 +1,27 @@
+[Unit]
+Description=Hermes Worker (cpamc-railway GPU pipeline)
+Documentation=https://github.com/sirwhy/cpamc-railway/blob/main/docs/hermes-deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=hermes
+Group=hermes
+WorkingDirectory=/opt/hermes
+EnvironmentFile=/etc/hermes/hermes.env
+Environment=HERMES_DATA_DIR=/var/lib/hermes
+ExecStart=/opt/hermes/venv/bin/python -m uvicorn app.main:app \
+    --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=60
+# GPU access (no isolation; the box is single-tenant)
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/hermes
+
+[Install]
+WantedBy=multi-user.target

@@ -4,3 +4,8 @@ data/
 workspace/
 *.log
 .DS_Store
+
+__pycache__/
+*.pyc
+worker/data/
+.env

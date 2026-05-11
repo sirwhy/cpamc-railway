@@ -1,0 +1,12 @@
+# Hermes Worker — pinned minimal deps. Heavy ML libs (torch, demucs, TTS,
+# faster-whisper, basic-pitch, rvc-python) are installed by `install.sh`
+# with CUDA-matched wheels so the version here just locks the API surface.
+
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.9.2
+python-multipart==0.0.20
+python-dotenv==1.0.1
+httpx==0.28.1
+# yt-dlp is pinned loosely; downloads update sites frequently
+yt-dlp>=2024.12.6

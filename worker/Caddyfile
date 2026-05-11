@@ -1,0 +1,39 @@
+# Caddyfile for Hermes Worker
+# Edit hermes.example.com to your actual hostname. Caddy will obtain a
+# Let's Encrypt cert automatically on first start.
+#
+# Test the deployment after editing:
+#     sudo systemctl reload caddy
+#     curl -fsS https://hermes.example.com/healthz
+
+hermes.example.com {
+    encode gzip
+    request_body {
+        max_size 200MB
+    }
+
+    @health path /healthz
+    handle @health {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    handle /v1/* {
+        reverse_proxy 127.0.0.1:8000 {
+            transport http {
+                read_timeout 30m
+                write_timeout 30m
+            }
+        }
+    }
+
+    handle {
+        respond "Hermes Worker — see /healthz" 200
+    }
+
+    log {
+        output file /var/log/caddy/hermes.access.log {
+            roll_size 100mb
+            roll_keep 5
+        }
+    }
+}
