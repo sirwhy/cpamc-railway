@@ -87,7 +87,10 @@ def _xtts_lang_code(target_language: str) -> str:
 
 
 def _split_translated_lines(translated_txt: Path) -> List[str]:
-    return [ln.strip() for ln in translated_txt.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    # Preserve empty lines so the i-th entry stays aligned with the i-th
+    # transcript segment (an empty translation = intentional silence /
+    # instrumental break for that segment).
+    return [ln.strip() for ln in translated_txt.read_text(encoding="utf-8").splitlines()]
 
 
 async def run(

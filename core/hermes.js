@@ -127,21 +127,29 @@ function artifactUrl(jobId, filename) {
  * Fetch an artifact as a Buffer (used by bot to upload to Telegram).
  * Returns { buffer, contentType, filename }.
  */
-async function fetchArtifact(jobId, filename) {
+async function fetchArtifact(jobId, filename, { timeoutMs } = {}) {
   if (!isConfigured()) throw new Error(configError());
   const url = artifactUrl(jobId, filename);
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${WORKER_TOKEN}` }
-  });
-  if (!res.ok) {
-    throw new Error(`Worker artifact ${res.status}: ${res.statusText} (${filename})`);
+  const controller = new AbortController();
+  const limit = timeoutMs || TIMEOUT_MS * 4; // generous for large mp3/stem.zip
+  const timer = setTimeout(() => controller.abort(), limit);
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${WORKER_TOKEN}` },
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      throw new Error(`Worker artifact ${res.status}: ${res.statusText} (${filename})`);
+    }
+    const buffer = await res.buffer();
+    return {
+      buffer,
+      contentType: res.headers.get('content-type') || 'application/octet-stream',
+      filename
+    };
+  } finally {
+    clearTimeout(timer);
   }
-  const buffer = await res.buffer();
-  return {
-    buffer,
-    contentType: res.headers.get('content-type') || 'application/octet-stream',
-    filename
-  };
 }
 
 module.exports = {
